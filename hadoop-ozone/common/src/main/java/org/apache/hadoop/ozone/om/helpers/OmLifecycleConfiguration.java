@@ -19,9 +19,11 @@ package org.apache.hadoop.ozone.om.helpers;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import net.jcip.annotations.Immutable;
 import org.apache.commons.lang3.StringUtils;
@@ -135,9 +137,10 @@ public final class OmLifecycleConfiguration extends WithObjectID
           + LC_MAX_RULES + " rules", OMException.ResultCodes.INVALID_REQUEST);
     }
 
-    if (!hasNoDuplicateID(rules)) {
-      throw new OMException("Invalid lifecycle configuration: Duplicate rule IDs found.",
-          OMException.ResultCodes.INVALID_REQUEST);
+    String duplicateID = findDuplicateID(rules);
+    if (duplicateID != null) {
+      throw new OMException("Invalid lifecycle configuration: Duplicate rule ID '" + duplicateID
+          + "' found.", OMException.ResultCodes.INVALID_REQUEST);
     }
 
     for (OmLCRule rule : rules) {
@@ -145,11 +148,19 @@ public final class OmLifecycleConfiguration extends WithObjectID
     }
   }
 
-  private static boolean hasNoDuplicateID(List<OmLCRule> rules) {
-    return rules.size() == rules.stream()
-        .map(OmLCRule::getId)
-        .collect(Collectors.toSet())
-        .size();
+  /**
+   * The first rule ID that another rule already used, or null if every ID is
+   * unique. The ID is reported back to the client, which cannot act on being
+   * told only that some ID was repeated.
+   */
+  private static String findDuplicateID(List<OmLCRule> rules) {
+    Set<String> ids = new HashSet<>();
+    for (OmLCRule rule : rules) {
+      if (!ids.add(rule.getId())) {
+        return rule.getId();
+      }
+    }
+    return null;
   }
 
   public Builder toBuilder() {

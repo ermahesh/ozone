@@ -25,6 +25,7 @@ import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.ozone.audit.S3GAction;
 import org.apache.hadoop.ozone.client.OzoneBucket;
 import org.apache.hadoop.ozone.client.OzoneLifecycleConfiguration;
@@ -142,7 +143,11 @@ public class BucketLifecycleHandler extends BucketOperationHandler {
       // translation maps to InvalidRequest. AWS S3 uses InvalidArgument for a rejected lifecycle
       // configuration, so only this validation step is remapped.
       if (ex.getResult() == OMException.ResultCodes.INVALID_REQUEST) {
-        throw S3ErrorTable.newError(S3ErrorTable.INVALID_ARGUMENT, bucketName, ex);
+        // Only the validation message says what was rejected, such as which rule ID was
+        // duplicated. Without it the response carries the static "Invalid Argument" of the
+        // error table, which leaves the client to find the offending rule on its own.
+        throw withValidationMessage(
+            S3ErrorTable.newError(S3ErrorTable.INVALID_ARGUMENT, bucketName, ex), ex);
       }
       throw S3ErrorTable.newError(bucketName, ex);
     }
@@ -155,6 +160,17 @@ public class BucketLifecycleHandler extends BucketOperationHandler {
       throw S3ErrorTable.newError(bucketName, ex);
     }
     return Response.ok().build();
+  }
+
+  /**
+   * Replaces the generic message of the error table with the one the validation
+   * failed with, keeping the S3 error code and status of {@code error}. A
+   * validation failure without a message is left as it is.
+   */
+  private static OS3Exception withValidationMessage(OS3Exception error, OMException cause) {
+    return StringUtils.isBlank(cause.getMessage())
+        ? error
+        : error.withMessage(cause.getMessage());
   }
 
   public Response getBucketLifecycleConfiguration(S3RequestContext context, String bucketName)

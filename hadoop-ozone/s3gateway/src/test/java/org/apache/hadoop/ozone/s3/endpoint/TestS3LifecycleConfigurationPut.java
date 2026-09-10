@@ -30,6 +30,7 @@ import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.MALFORMED_XML;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.NO_SUCH_BUCKET;
 import static org.apache.hadoop.ozone.s3.exception.S3ErrorTable.QUOTA_EXCEEDED;
 import static org.apache.hadoop.ozone.s3.util.S3Consts.EXPECTED_BUCKET_OWNER_HEADER;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -133,6 +134,21 @@ public class TestS3LifecycleConfigurationPut {
         HTTP_BAD_REQUEST, INVALID_ARGUMENT.getCode());
     testInvalidLifecycleConfiguration(TestS3LifecycleConfigurationPut::withEmptyFilterAndInvalidDate,
         HTTP_BAD_REQUEST, INVALID_ARGUMENT.getCode());
+  }
+
+  /**
+   * A rejected configuration reports what was wrong with it. The message of the
+   * validation failure is what names the duplicated rule ID; the error code on
+   * its own only says that some argument was invalid.
+   */
+  @Test
+  public void testPutLifecycleConfigurationWithDuplicateRuleIds() {
+    OS3Exception ex = assertThrows(OS3Exception.class,
+        () -> bucketEndpoint.put("bucket1", duplicateRuleIds()));
+
+    assertEquals(HTTP_BAD_REQUEST, ex.getHttpCode());
+    assertEquals(INVALID_ARGUMENT.getCode(), ex.getCode());
+    assertThat(ex.getErrorMessage()).contains("Duplicate rule ID 'expire-rule'");
   }
 
   @Test
@@ -293,6 +309,26 @@ public class TestS3LifecycleConfigurationPut {
     testInvalidLifecycleConfiguration(
         TestS3LifecycleConfigurationPut::withAbortNegativeDays,
         HTTP_BAD_REQUEST, INVALID_ARGUMENT.getCode());
+  }
+
+  private static InputStream duplicateRuleIds() {
+    String xml = ("<LifecycleConfiguration xmlns=\"http://s3.amazonaws" +
+        ".com/doc/2006-03-01/\">" +
+        "<Rule>" +
+        "<ID>expire-rule</ID>" +
+        "<Prefix>logs/</Prefix>" +
+        "<Status>Enabled</Status>" +
+        "<Expiration><Days>30</Days></Expiration>" +
+        "</Rule>" +
+        "<Rule>" +
+        "<ID>expire-rule</ID>" +
+        "<Prefix>tmp/</Prefix>" +
+        "<Status>Enabled</Status>" +
+        "<Expiration><Days>60</Days></Expiration>" +
+        "</Rule>" +
+        "</LifecycleConfiguration>");
+
+    return new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8));
   }
 
   private static InputStream onePrefix() {

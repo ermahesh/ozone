@@ -197,9 +197,19 @@ class TestOmLCRule {
     assertTrue(rule.isTagEnable());
   }
 
+  /**
+   * The rejection names the ID that was repeated. Being told only that some ID
+   * occurs twice leaves the client to find it among the rules it sent.
+   */
   @Test
   public void testDuplicateRuleIDs() throws OMException {
     List<OmLCRule> rules = new ArrayList<>();
+
+    rules.add(new OmLCRule.Builder()
+        .setId("unique-id")
+        .setPrefix("")
+        .setAction(new OmLCExpiration.Builder().setDays(15).build())
+        .build());
 
     rules.add(new OmLCRule.Builder()
         .setId("duplicate-id")
@@ -218,7 +228,7 @@ class TestOmLCRule {
         .setBucket("bucket")
         .setRules(rules);
 
-    assertOMException(config::build, INVALID_REQUEST, "Duplicate rule IDs found");
+    assertOMException(config::build, INVALID_REQUEST, "Duplicate rule ID 'duplicate-id' found");
   }
 
   @Test
