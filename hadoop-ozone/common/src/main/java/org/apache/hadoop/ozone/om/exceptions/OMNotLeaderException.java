@@ -57,6 +57,17 @@ public class OMNotLeaderException extends IOException {
     this.leaderAddress = null;
   }
 
+  /**
+   * Suppresses the stack trace. This exception is an expected step of OM HA
+   * failover and the client retries it transparently, but the RPC server
+   * stringifies the whole exception into the {@code RemoteException} message
+   * sent back, so a stack trace here is logged verbatim by every client.
+   */
+  @Override
+  public synchronized Throwable fillInStackTrace() {
+    return this;
+  }
+
   public String getSuggestedLeaderNodeId() {
     return leaderPeerId;
   }
