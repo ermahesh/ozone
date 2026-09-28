@@ -31,7 +31,6 @@ import org.apache.hadoop.hdds.scm.SCMCommonPlacementPolicy;
 import org.apache.hadoop.hdds.scm.exceptions.SCMException;
 import org.apache.hadoop.hdds.scm.net.NetConstants;
 import org.apache.hadoop.hdds.scm.net.NetworkTopology;
-import org.apache.hadoop.hdds.scm.net.Node;
 import org.apache.hadoop.hdds.scm.node.NodeManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -460,17 +459,22 @@ public final class SCMContainerPlacementRackAware
     }
 
     boolean isFallbacked = false;
+    // Index of the affinity node whose rack is being searched. Each affinity
+    // node's rack gets its own retry budget, so invalid nodes on one rack do
+    // not prevent searching the racks of the remaining affinity nodes.
+    int affinityIndex = 0;
     while (true) {
       metrics.incrDatanodeChooseAttemptCount();
       DatanodeDetails node = null;
       if (affinityNodes != null) {
-        for (Node affinityNode : affinityNodes) {
+        while (affinityIndex < affinityNodes.size()) {
           node = (DatanodeDetails)networkTopology.chooseRandom(
               NetConstants.ROOT, excludedNodesForCapacity, excludedNodes,
-              affinityNode, ancestorGen);
+              affinityNodes.get(affinityIndex), ancestorGen);
           if (node != null) {
             break;
           }
+          affinityIndex++;
         }
       } else {
         node = (DatanodeDetails)networkTopology.chooseRandom(NetConstants.ROOT,
@@ -518,19 +522,26 @@ public final class SCMContainerPlacementRackAware
         return node;
       }
 
-      maxRetry--;
-      if (maxRetry == 0) {
-        // avoid the infinite loop
-        String errMsg = "No satisfied datanode to meet the space constrains. "
-            + "metadata size required: " + metadataSizeRequired +
-            " data size required: " + dataSizeRequired;
-        LOG.info(errMsg);
-        throw new SCMException(errMsg, null);
-      }
       if (excludedNodesForCapacity == null) {
         excludedNodesForCapacity = new ArrayList<>();
       }
       excludedNodesForCapacity.add(node.getNetworkFullPath());
+      maxRetry--;
+      if (maxRetry == 0) {
+        if (affinityNodes != null) {
+          // give up on this affinity node's rack and move on to the next
+          // affinity node's rack, then to the fallback options
+          affinityIndex++;
+          maxRetry = MAX_RETRY;
+          continue;
+        }
+        // avoid the infinite loop
+        String errMsg = "No satisfied datanode to meet the writable node " +
+            "and space constraints. metadata size required: " +
+            metadataSizeRequired + " data size required: " + dataSizeRequired;
+        LOG.info(errMsg);
+        throw new SCMException(errMsg, null);
+      }
     }
   }
 

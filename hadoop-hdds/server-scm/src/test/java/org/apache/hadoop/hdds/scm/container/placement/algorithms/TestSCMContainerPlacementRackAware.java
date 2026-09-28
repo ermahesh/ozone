@@ -679,6 +679,50 @@ public class TestSCMContainerPlacementRackAware {
   }
 
   @Test
+  public void chooseNodeOnOtherUsedRackWhenFirstRackNotWritable()
+      throws SCMException {
+    setup(2 * NODE_PER_RACK);
+    //    /rack0/node0  -> used
+    //    /rack0/node1  -> DECOMMISSIONED
+    //    /rack0/node2  -> DECOMMISSIONED
+    //    /rack0/node3  -> DECOMMISSIONED
+    //    /rack0/node4  -> DECOMMISSIONED
+    //    /rack1/node5  -> used
+    //    /rack1/node6..node9 -> IN_SERVICE
+    for (int i = 1; i < NODE_PER_RACK; i++) {
+      dnInfos.get(i).setNodeStatus(NodeStatus.valueOf(DECOMMISSIONED, HEALTHY));
+    }
+    List<DatanodeDetails> usedNodes = new ArrayList<>(
+        Arrays.asList(datanodes.get(0), datanodes.get(NODE_PER_RACK)));
+
+    // Without fallback, the new node must come from the second used rack.
+    List<DatanodeDetails> datanodeDetails = policyNoFallback.chooseDatanodes(
+        usedNodes, new ArrayList<>(), null, 1, 0, 5);
+    assertEquals(1, datanodeDetails.size());
+    assertTrue(cluster.isSameParent(
+        datanodes.get(NODE_PER_RACK), datanodeDetails.get(0)));
+  }
+
+  @Test
+  public void chooseNodeOnOtherUsedRackWhenFirstRackHasNoSpace()
+      throws SCMException {
+    setup(2 * NODE_PER_RACK);
+    // All the other nodes on rack0 have no space.
+    for (int i = 1; i < NODE_PER_RACK; i++) {
+      when(nodeManager.hasAvailableSpace(dnInfos.get(i))).thenReturn(false);
+    }
+    List<DatanodeDetails> usedNodes = new ArrayList<>(
+        Arrays.asList(datanodes.get(0), datanodes.get(NODE_PER_RACK)));
+
+    // Without fallback, the new node must come from the second used rack.
+    List<DatanodeDetails> datanodeDetails = policyNoFallback.chooseDatanodes(
+        usedNodes, new ArrayList<>(), null, 1, 0, 5);
+    assertEquals(1, datanodeDetails.size());
+    assertTrue(cluster.isSameParent(
+        datanodes.get(NODE_PER_RACK), datanodeDetails.get(0)));
+  }
+
+  @Test
   public void chooseSingleNodeRackWithUsedAndExcludeNodes()
       throws SCMException {
     int datanodeCount = 5;
