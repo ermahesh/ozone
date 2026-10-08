@@ -417,6 +417,53 @@ public class TestSCMContainerPlacementRackAware {
         favoredNodes.get(0).getNetworkFullPath());
   }
 
+  /**
+   * Leave a single datanode with space, so that the random picks almost
+   * always miss it and the scan has to find it.
+   */
+  private void leaveOnlyNodeWithSpace(int index) {
+    for (DatanodeInfo dn : dnInfos) {
+      when(nodeManager.hasAvailableSpace(dn)).thenReturn(false);
+    }
+    when(nodeManager.hasAvailableSpace(dnInfos.get(index))).thenReturn(true);
+  }
+
+  @Test
+  public void chooseNodeWhenOnlyOneNodeHasSpace() throws SCMException {
+    setup(3 * NODE_PER_RACK);
+    int nodeWithSpace = 2 * NODE_PER_RACK + 2;
+    leaveOnlyNodeWithSpace(nodeWithSpace);
+
+    // Repeat, because a random pick can still find the node by chance.
+    for (int i = 0; i < 10; i++) {
+      List<DatanodeDetails> chosen =
+          policy.chooseDatanodes(null, null, 1, 0, 0);
+
+      assertEquals(1, chosen.size());
+      assertEquals(datanodes.get(nodeWithSpace), chosen.get(0));
+    }
+  }
+
+  @Test
+  public void chooseNodeOnUsedRackWhenOnlyOneNodeThereHasSpace()
+      throws SCMException {
+    setup(3 * NODE_PER_RACK);
+    // One replica on rack0, and only one other rack0 node still has space.
+    int nodeWithSpace = 3;
+    leaveOnlyNodeWithSpace(nodeWithSpace);
+
+    for (int i = 0; i < 10; i++) {
+      List<DatanodeDetails> usedNodes =
+          new ArrayList<>(Arrays.asList(datanodes.get(0)));
+
+      List<DatanodeDetails> chosen = policyNoFallback.chooseDatanodes(
+          usedNodes, new ArrayList<>(), null, 1, 0, 0);
+
+      assertEquals(1, chosen.size());
+      assertEquals(datanodes.get(nodeWithSpace), chosen.get(0));
+    }
+  }
+
   @ParameterizedTest
   @MethodSource("numDatanodes")
   public void testNoInfiniteLoop(int datanodeCount) {

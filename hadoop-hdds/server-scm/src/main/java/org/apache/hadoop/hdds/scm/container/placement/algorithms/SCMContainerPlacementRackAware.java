@@ -21,9 +21,13 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 import org.apache.hadoop.hdds.conf.ConfigurationSource;
 import org.apache.hadoop.hdds.protocol.DatanodeDetails;
@@ -518,20 +522,118 @@ public final class SCMContainerPlacementRackAware
         return node;
       }
 
-      maxRetry--;
-      if (maxRetry == 0) {
-        // avoid the infinite loop
-        String errMsg = "No satisfied datanode to meet the space constrains. "
-            + "metadata size required: " + metadataSizeRequired +
-            " data size required: " + dataSizeRequired;
-        LOG.info(errMsg);
-        throw new SCMException(errMsg, null);
-      }
       if (excludedNodesForCapacity == null) {
         excludedNodesForCapacity = new ArrayList<>();
       }
       excludedNodesForCapacity.add(node.getNetworkFullPath());
+
+      maxRetry--;
+      if (maxRetry == 0) {
+        // Random picks keep landing on datanodes that are not writable or are
+        // out of space. That is expected when only a small share of the
+        // cluster is usable, because every pick is uniform over all the
+        // candidates. Scan the candidates once instead, so placement still
+        // succeeds while any suitable datanode is left.
+        DatanodeDetails scannedNode = scanForValidNode(excludedNodes,
+            affinityNodes, usedNodes, excludedNodesForCapacity, ancestorGen,
+            metadataSizeRequired, dataSizeRequired);
+        if (scannedNode != null) {
+          metrics.incrDatanodeChooseSuccessCount();
+          if (isFallbacked) {
+            metrics.incrDatanodeChooseFallbackCount();
+          }
+          return scannedNode;
+        }
+        // the scan covered every candidate, so there is nothing left to retry
+        String errMsg = "No satisfied datanode to meet the writable node and "
+            + "space constraints. metadata size required: " +
+            metadataSizeRequired + " data size required: " + dataSizeRequired;
+        LOG.info(errMsg);
+        throw new SCMException(errMsg, null);
+      }
     }
+  }
+
+  /**
+   * Choose a datanode by checking every candidate once, rather than picking at
+   * random and hoping it is suitable.
+   * <p>
+   * This applies the same constraints as the random selection above, so it
+   * returns a node only if {@code chooseRandom} could have returned it too. It
+   * costs one pass over the datanodes, which is why it is used only after the
+   * random attempts are spent.
+   *
+   * @param excludedNodes - datanodes to exclude. Can be null.
+   * @param affinityNodes - the chosen node must share a rack with one of
+   *                      these. Can be null.
+   * @param usedNodes - datanodes already holding a replica. Can be null.
+   * @param excludedNodesForCapacity - network paths already ruled out.
+   * @param ancestorGen - RACK_LEVEL to keep the chosen node off the racks of
+   *                    the excluded nodes, 0 once that has been relaxed.
+   * @param metadataSizeRequired - size required for Ratis metadata.
+   * @param dataSizeRequired - size required for the container.
+   * @return a suitable datanode, or null if there is none.
+   */
+  private DatanodeDetails scanForValidNode(List<DatanodeDetails> excludedNodes,
+      List<DatanodeDetails> affinityNodes, List<DatanodeDetails> usedNodes,
+      List<String> excludedNodesForCapacity, int ancestorGen,
+      long metadataSizeRequired, long dataSizeRequired) {
+    Set<String> excludedPaths = excludedNodesForCapacity == null
+        ? Collections.emptySet() : new HashSet<>(excludedNodesForCapacity);
+    List<DatanodeDetails> suitableNodes = new ArrayList<>();
+    for (Node candidate : networkTopology.getNodes(
+        networkTopology.getMaxLevel())) {
+      if (!(candidate instanceof DatanodeDetails)) {
+        continue;
+      }
+      DatanodeDetails node = (DatanodeDetails) candidate;
+      if (excludedPaths.contains(node.getNetworkFullPath()) ||
+          (usedNodes != null && usedNodes.contains(node)) ||
+          (excludedNodes != null && excludedNodes.contains(node)) ||
+          (affinityNodes != null && affinityNodes.contains(node))) {
+        continue;
+      }
+      if (!matchesRackConstraint(node, excludedNodes, affinityNodes,
+          ancestorGen)) {
+        continue;
+      }
+      if (isValidNode(node, metadataSizeRequired, dataSizeRequired)) {
+        suitableNodes.add(node);
+      }
+    }
+    if (suitableNodes.isEmpty()) {
+      return null;
+    }
+    // Pick at random so repeated placements spread over the suitable nodes
+    // instead of all piling onto the first one.
+    return suitableNodes.get(
+        ThreadLocalRandom.current().nextInt(suitableNodes.size()));
+  }
+
+  /**
+   * Check the rack constraint that the random selection would have applied:
+   * stay on an affinity node's rack when there is one, otherwise keep off the
+   * racks of the excluded nodes while the rack constraint is still in force.
+   */
+  private boolean matchesRackConstraint(DatanodeDetails node,
+      List<DatanodeDetails> excludedNodes, List<DatanodeDetails> affinityNodes,
+      int ancestorGen) {
+    if (affinityNodes != null) {
+      for (DatanodeDetails affinityNode : affinityNodes) {
+        if (networkTopology.isSameParent(node, affinityNode)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (ancestorGen == RACK_LEVEL && excludedNodes != null) {
+      for (DatanodeDetails excludedNode : excludedNodes) {
+        if (networkTopology.isSameParent(node, excludedNode)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**
